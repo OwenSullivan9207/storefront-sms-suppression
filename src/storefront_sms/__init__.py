@@ -1,0 +1,1 @@
+"""Storefront SMS suppression example."""
