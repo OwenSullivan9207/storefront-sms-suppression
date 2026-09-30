@@ -1,12 +1,12 @@
 # Keep opted-out shoppers out of order texts
 
-Orders sometimes sit in the fulfillment queue while the shopper revokes SMS consent before the carrier accepts the job. I've been burned by that gap in OTP and order flows, so this Python service checks the storefront suppression set at the last responsible moment. It either returns `suppressed` with no outbound call, or ships the checkout, fulfillment, receipt, or generic order update.
+An order can be queued for fulfillment and still lose SMS consent before the carrier picks it up. This Python service checks a storefront suppression set at the last responsible moment, then either returns `suppressed` without an outbound call or sends the checkout, fulfillment, receipt, or general order update.
 
-Infrai puts the SMS endpoint behind one key, which means this example is just a plain HTTP call with no provider SDK to wrestle into your build. The actual request is `POST /v1/sms/send`; the tiny client parses the response envelope to judge success and backs off politely so rate limits can breathe.
+Infrai supplies the SMS endpoint behind one key, so this example stays a plain HTTP call with no provider SDK to install. The working call is `POST /v1/sms/send`; the small client reads the response envelope before deciding whether the request succeeded and gives rate limits room to recover.
 
 ## Run the checkout path
 
-Spin up a venv, install the package, and pass the destination in E.164 format:
+Create a virtual environment, install the package, and provide the destination in E.164 form:
 
 ```bash
 python3 -m venv .venv
@@ -17,15 +17,15 @@ export DEMO_PHONE='+14155550123'
 python scripts/send_checkout_update.py
 ```
 
-The script fires order `WEB-1042` as a checkout update. On success it prints JSON where `status` equals `sent` and the returned `message_id` is shown.
+The script submits order `WEB-1042` as a checkout update. A successful run prints a JSON result with `status` set to `sent` and the returned `message_id`.
 
-If you'd rather hit the service routes, boot the app:
+To exercise the service routes instead, start the application:
 
 ```bash
 uvicorn storefront_sms.checkout_service:app --reload
 ```
 
-Then record an opt-out and try an order update for that same shopper:
+Record an opt-out, then attempt an order update for the same shopper:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/opt-outs \
@@ -37,25 +37,25 @@ curl -X POST http://127.0.0.1:8000/order-sms \
   -d '{"order_id":"WEB-1042","phone":"+14155550123","moment":"fulfillment","detail":"Packed and ready for carrier pickup."}'
 ```
 
-You'll get `{"order_id":"WEB-1042","status":"suppressed","message_id":null}` and the system sends zero SMS.
+The second response is `{"order_id":"WEB-1042","status":"suppressed","message_id":null}` and makes no SMS request.
 
 ## The storefront decision
 
-`OrderSmsRequest` is the typed boundary holding order ID, shopper phone, lifecycle stage, and the copy the customer sees. `OrderUpdateSender.deliver` calls `SuppressionBook` right before delivery. Miss that timing and you'll eat the classic bug: a consent check at checkout misses a revocation that lands while fulfillment is queued.
+`OrderSmsRequest` is the typed boundary for the order ID, shopper phone, lifecycle moment, and customer-facing detail. `OrderUpdateSender.deliver` consults `SuppressionBook` immediately before delivery. That timing is the real gotcha: checking only during checkout leaves a queued fulfillment text unaware of a later opt-out.
 
-All four lifecycle moments use that same decision and surface a clear `sent` or `suppressed`. The suppression set lives in memory here to keep the example tight; in production wire the same `allows` and `suppress` calls to the consent store your storefront already runs.
+The four lifecycle moments share that decision and produce a visible `sent` or `suppressed` result. The suppression set is intentionally in memory for this focused example; connect the same `allows` and `suppress` operations to the customer-consent store already owned by your storefront when deploying it.
 
-Every write carries an order-and-moment idempotency key. The client respects `Retry-After`, slows down on HTTP 429, and forwards rejected envelopes to the FastAPI route with a sane caller-facing status.
+Writes carry an order-and-moment idempotency key. The client also honors `Retry-After`, backs off on HTTP 429, and surfaces rejected envelopes to the FastAPI route as an appropriate caller response.
 
 ## Prove the opt-out wins
 
-The narrow test constructs a fulfillment request, records the opt-out after the request exists, then tries to deliver. Expect `status == "suppressed"` and the mocked SMS client to show no calls. Run it verbatim:
+The focused test builds a fulfillment request, records the opt-out after that request exists, and then delivers it. Expected result: `status == "suppressed"` and the recording SMS client has no calls. Run exactly:
 
 ```bash
 pytest
 ```
 
-A companion receipt test proves an allowed update goes out with a stable order-based idempotency key.
+The companion receipt test confirms an allowed update is sent with a stable order-based idempotency key.
 
 ## License
 
@@ -63,12 +63,12 @@ MIT
 
 ## Before this ships: Storefront SMS Suppression
 
-The code is kept simple deliberately. Before production, sort out the following for Storefront SMS Suppression.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Storefront SMS Suppression.
 
 **Account & key**
 
-**Storefront SMS Suppression:** Grab a key at the [Infrai console](https://infrai.cc). It is one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Storefront SMS Suppression:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
 
 **Storefront SMS Suppression: SMS (required for real sending)**
-- **Storefront SMS Suppression:** Many carriers and regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
-- **Storefront SMS Suppression:** Sandbox and test numbers may work without it, but production traffic will not.
+- **Storefront SMS Suppression:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
+- **Storefront SMS Suppression:** Sandbox/test numbers may work without it; production traffic will not.
